@@ -1,0 +1,100 @@
+// ============================================================================
+// PROPOSED Firestore rules — NOT DEPLOYED.
+// ============================================================================
+// ⚠️ IMPORTANT ASSUMPTION: I was not given the actual currently-deployed
+// rules file for food-finder-ai-8ac84. The grower-ownership pattern below
+// (`isGrowerOwner`, anonymous-auth growers writing to their own
+// growerId-tagged docs) is reconstructed from what's on file about how
+// FRESH DETROIT works today — a listing with `growerId` not matching
+// `request.auth.uid` gets rejected. Before this is ever deployed, diff it
+// line-by-line against the real deployed rules and reconcile any
+// differences. Do not deploy from this file blind.
+// ============================================================================
+
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Shared helpers ──────────────────────────────────────────────────
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // Grower ownership: a grower (anonymous-auth) may only write documents
+    // where growerId equals their own auth uid. This preserves the
+    // EXISTING security model — do not weaken it.
+    function isGrowerOwner(data) {
+      return signedIn() && data.growerId == request.auth.uid;
+    }
+
+    // Operator/admin authorization: request.auth.uid must have a
+    // corresponding admins/{uid} document. FRESH MANAGER signs operators
+    // in with email/password (not anonymous), so this never collides with
+    // grower-owned anonymous uids.
+    function isAdmin() {
+      return signedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    // ── Admin registry ───────────────────────────────────────────────────
+    // Client apps only ever READ their own admin doc (to confirm
+    // authorization after sign-in). Writes are intentionally NOT allowed
+    // from any client — admins are provisioned out-of-band (Console/trusted
+    // script), never self-service.
+    match /admins/{uid} {
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow write: if false;
+    }
+
+    // ── DETROIT (legacy, unchanged ownership model + new admin branch) ──
+    match /fd_growers/{growerId} {
+      allow read: if true;
+      allow write: if isGrowerOwner(request.resource.data) || isAdmin();
+    }
+    match /fd_listings/{listingId} {
+      allow read: if true;
+      allow create: if isGrowerOwner(request.resource.data) || isAdmin();
+      allow update, delete: if isGrowerOwner(resource.data) || isAdmin();
+    }
+    match /fd_alerts/{alertId} {
+      allow read: if true;
+      allow write: if isGrowerOwner(request.resource.data) || isAdmin();
+    }
+
+    // ── ATLANTA (legacy, unchanged ownership model + new admin branch) ──
+    match /fa_growers/{growerId} {
+      allow read: if true;
+      allow write: if isGrowerOwner(request.resource.data) || isAdmin();
+    }
+    match /fa_listings/{listingId} {
+      allow read: if true;
+      allow create: if isGrowerOwner(request.resource.data) || isAdmin();
+      allow update, delete: if isGrowerOwner(resource.data) || isAdmin();
+    }
+    match /fa_alerts/{alertId} {
+      allow read: if true;
+      allow write: if isGrowerOwner(request.resource.data) || isAdmin();
+    }
+
+    // ── LITHONIA / future cities — scalable city-aware architecture ─────
+    // New structure only. Detroit/Atlanta are NOT migrated here.
+    match /cities/{cityId} {
+      allow read: if true;
+      allow write: if isAdmin();
+
+      match /growers/{growerId} {
+        allow read: if true;
+        allow write: if isGrowerOwner(request.resource.data) || isAdmin();
+      }
+      match /listings/{listingId} {
+        allow read: if true;
+        allow create: if isGrowerOwner(request.resource.data) || isAdmin();
+        allow update, delete: if isGrowerOwner(resource.data) || isAdmin();
+      }
+      match /alerts/{alertId} {
+        allow read: if true;
+        allow write: if isGrowerOwner(request.resource.data) || isAdmin();
+      }
+    }
+  }
+}
